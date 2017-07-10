@@ -112,6 +112,15 @@ public:
     template <typename... Args>
     future<> start(Args&&... args);
 
+    /// Starts \c Service by constructing an instance on every logical core except cpu0
+    /// with a copy of \c args passed to the constructor.
+    ///
+    /// \param args Arguments to be forwarded to \c Service constructor
+    /// \return a \ref future<> that becomes ready when all instances have been
+    ///         constructed.
+    template <typename... Args>
+    future<> start_reserved(Args&&... args);
+
     /// Starts \c Service by constructing an instance on a single logical core
     /// with a copy of \c args passed to the constructor.
     ///
@@ -332,6 +341,30 @@ template <typename... Args>
 future<>
 sharded<Service>::start(Args&&... args) {
     _instances.resize(smp::count);
+    return parallel_for_each(boost::irange<unsigned>(0, _instances.size()),
+        [this, args = std::make_tuple(std::forward<Args>(args)...)] (unsigned c) mutable {
+            return smp::submit_to(c, [this, args] () mutable {
+                _instances[engine().cpu_id()].service = apply([this] (Args... args) {
+                    return create_local_service(std::forward<Args>(args)...);
+                }, args);
+            });
+    }).then_wrapped([this] (future<> f) {
+        try {
+            f.get();
+            return make_ready_future<>();
+        } catch (...) {
+            return this->stop().then([e = std::current_exception()] () mutable {
+                std::rethrow_exception(e);
+            });
+        }
+    });
+}
+
+template <typename Service>
+template <typename... Args>
+future<>
+sharded<Service>::start_reserved(Args&&... args) {
+    _instances.resize(smp::count - 1);
     return parallel_for_each(boost::irange<unsigned>(0, _instances.size()),
         [this, args = std::make_tuple(std::forward<Args>(args)...)] (unsigned c) mutable {
             return smp::submit_to(c, [this, args] () mutable {

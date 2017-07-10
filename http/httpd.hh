@@ -434,7 +434,7 @@ public:
 
 
     future<> start(const sstring& name = generate_server_name()) {
-        return _server_dist->start(name);
+        return _server_dist->start_reserved(name);
     }
 
     future<> stop() {
